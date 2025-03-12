@@ -1,8 +1,10 @@
 #!/bin/bash
 
 echo "Compiling src files."
+make
 
-mkdir -p ./build
-
-g++ -Wall -Wextra -O2 -g ./src/redis.c -o ./build/redis
-g++ -Wall -Wextra -O2 -g ./src/client.c -o ./build/client
+if [ $? - eq 0]; then
+  echo "Build complete. Binaries in build/"
+else
+  echo "Build failed."
+fi

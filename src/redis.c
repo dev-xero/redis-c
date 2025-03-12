@@ -38,6 +38,7 @@ int main() {
     while (true) {
         struct sockaddr_in client_addr = {};
         socklen_t socklen = sizeof(client_addr);
+
         int connfd = accept(fd, (struct sockaddr *)&client_addr, &socklen);
         if (connfd < 0) {
             continue; // error
@@ -45,11 +46,12 @@ int main() {
 
         // Only serve one client connection at once
         while (true) {
-            int32_t err = one_request(connfd);
-            if (err) {
-                break;
-            }
+            // int32_t err = one_request(connfd);
+            // if (err) {
+            //     break;
+            // }
         }
+
         close(connfd);
     }
 
