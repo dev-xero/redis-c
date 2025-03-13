@@ -23,6 +23,7 @@ static int32_t one_request(int connfd) {
     }
 
     uint32_t len = 0;
+    // Assuming Little-Endian archs
     memcpy(&len, rbuf, 4);
     if (len > K_MAX_MSG) {
         msg("Message is too long.");
