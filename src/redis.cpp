@@ -43,6 +43,7 @@ static int32_t one_request(int connfd) {
     const char reply[] = "world";
     char wbuf[4 + sizeof(reply)];
     len = (uint32_t)strlen(reply);
+    memcpy(wbuf, &len, 4);
     memcpy(&wbuf[4], reply, len);
 
     return write_all(connfd, wbuf, 4 + len);
