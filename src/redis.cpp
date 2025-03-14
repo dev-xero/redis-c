@@ -1,16 +1,31 @@
 #include "../include/constants.h"
 #include "../include/utils.h"
 #include <arpa/inet.h>
+#include <cstdint>
 #include <cstring>
 #include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
+#include <poll.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <vector>
+
+struct Conn {
+    int fd = -1;
+    // application's intention, for the event loop
+    bool want_read = false;
+    bool want_write = false;
+    bool want_close = false;
+    // bufferred input and output
+    std::vector<uint8_t> incoming;
+    std::vector<uint8_t> outgoing;
+};
 
 static int32_t one_request(int connfd) {
     // 4 bytes header
@@ -76,25 +91,27 @@ int main() {
         die("listen()");
     }
 
-    // Process any incoming connections
+    // Server Event Loop
+    std::vector<Conn *> fdToConn;
+    std::vector<struct pollfd> poll_args;
     while (true) {
-        struct sockaddr_in client_addr = {};
-        socklen_t socklen = sizeof(client_addr);
-
-        int connfd = accept(fd, (struct sockaddr *)&client_addr, &socklen);
-        if (connfd < 0) {
-            continue; // error
-        }
-
-        // Only serve one client connection at once
-        while (true) {
-            int32_t err = one_request(connfd);
-            if (err) {
-                break;
+        poll_args.clear();
+        struct pollfd pfd = {fd, POLLIN, 0};
+        poll_args.push_back(pfd);
+        for (Conn *conn : fdToConn) {
+            if (!conn) {
+                continue;
             }
+            struct pollfd pfd = {conn->fd, POLLERR, 0};
+            // poll() flags from the application's intent
+            if (conn->want_read) {
+                pfd.events |= POLLIN;
+            }
+            if (conn->want_write) {
+                pfd.events |= POLLOUT;
+            }
+            poll_args.push_back(pfd);
         }
-
-        close(connfd);
     }
 
     return 0;
