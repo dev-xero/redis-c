@@ -1,6 +1,8 @@
 #include "../include/constants.h"
 #include "../include/utils.h"
 #include <arpa/inet.h>
+#include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <errno.h>
@@ -12,6 +14,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <vector>
@@ -27,41 +30,20 @@ struct Conn {
     std::vector<uint8_t> outgoing;
 };
 
-static int32_t one_request(int connfd) {
-    // 4 bytes header
-    char rbuf[4 + K_MAX_MSG];
-    errno = 0;
-    int32_t err = read_full(connfd, rbuf, 4);
-    if (err) {
-        msg(errno == 0 ? "EOF" : "read() error");
-        return err;
+static Conn *handle_accept(int fd) {
+    struct sockaddr_in client_addr = {};
+    socklen_t socklen = sizeof(client_addr);
+    int connfd = accept(fd, (struct sockaddr *)&client_addr, &socklen);
+    if (connfd < 0) {
+        return NULL;
     }
+    fd_set_nb(connfd);
+    // Create a `struct Conn`
+    Conn *conn = new Conn();
+    conn->fd = connfd;
+    conn->want_read = true;
 
-    uint32_t len = 0;
-    // Assuming Little-Endian archs
-    memcpy(&len, rbuf, 4);
-    if (len > K_MAX_MSG) {
-        msg("Message is too long.");
-        return -1;
-    }
-
-    // Request body
-    err = read_full(connfd, &rbuf[4], len);
-    if (err) {
-        msg("read() error");
-        return err;
-    }
-
-    fprintf(stderr, "client says: %.*s\n", len, &rbuf[4]);
-
-    // Reply using the same protocol
-    const char reply[] = "world";
-    char wbuf[4 + sizeof(reply)];
-    len = (uint32_t)strlen(reply);
-    memcpy(wbuf, &len, 4);
-    memcpy(&wbuf[4], reply, len);
-
-    return write_all(connfd, wbuf, 4 + len);
+    return conn;
 }
 
 int main() {
@@ -96,6 +78,7 @@ int main() {
     std::vector<struct pollfd> poll_args;
     while (true) {
         poll_args.clear();
+
         struct pollfd pfd = {fd, POLLIN, 0};
         poll_args.push_back(pfd);
         for (Conn *conn : fdToConn) {
@@ -111,6 +94,25 @@ int main() {
                 pfd.events |= POLLOUT;
             }
             poll_args.push_back(pfd);
+        }
+
+        // Wait for readiness
+        int rv = poll(poll_args.data(), (nfds_t)poll_args.size(), -1);
+        if (rv < 0 && errno == EINTR) {
+            continue;
+        }
+        if (rv < 0) {
+            die("poll()");
+        }
+
+        // Handle the listening socket
+        if (poll_args[0].revents) {
+            if (Conn *conn = handle_accept(fd)) {
+                if (fdToConn.size() <= (size_t)conn->fd) {
+                    fdToConn.resize(conn->fd + 1);
+                }
+                fdToConn[conn->fd] = conn;
+            }
         }
     }
 
