@@ -16,6 +16,7 @@
 #include <string.h>
 #include <sys/poll.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <unistd.h>
 #include <vector>
 
@@ -29,6 +30,8 @@ struct Conn {
     std::vector<uint8_t> incoming;
     std::vector<uint8_t> outgoing;
 };
+
+static void fd_set_nb(int fd) { fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK); }
 
 static Conn *handle_accept(int fd) {
     struct sockaddr_in client_addr = {};
@@ -44,6 +47,50 @@ static Conn *handle_accept(int fd) {
     conn->want_read = true;
 
     return conn;
+}
+
+// Append to the back
+static void buf_append(std::vector<uint8_t> &buf, const uint8_t *data, size_t len) {
+    buf.insert(buf.end(), data, data + len);
+}
+
+// Remove from the front
+static void buf_consume(std::vector<uint8_t> &buf, size_t n) {
+    buf.erase(buf.begin(), buf.begin() + n);
+}
+
+// Process just 1 request if there is enough data
+static bool try_one_request(Conn *conn) {
+    if (conn->incoming.size() < 4) {
+        return false; // want read
+    }
+    uint32_t len = 0;
+    memcpy(&len, conn->incoming.data(), 4);
+    // protocol error
+    if (len > K_MAX_MSG) {
+        conn->want_close = true;
+        return false;
+    }
+    if (4 + len > conn->incoming.size()) {
+        return false; // want read
+    }
+    const uint8_t *request = &conn->incoming[4];
+    buf_append(conn->outgoing, (const uint8_t *)&len, 4);
+    buf_append(conn->outgoing, request, len);
+    // Remove the message from the `Conn::incoming`
+    buf_consume(conn->incoming, 4 + len);
+    return true; // success
+}
+
+static void handle_read(Conn *conn) {
+    uint8_t buf[64 * 1024];
+    ssize_t rv = read(conn->fd, buf, sizeof(buf));
+    if (rv <= 0) {
+        conn->want_close = true;
+        return;
+    }
+    buf_append(conn->incoming, buf, (size_t)rv);
+    try_one_request(conn);
 }
 
 int main() {
@@ -112,6 +159,18 @@ int main() {
                     fdToConn.resize(conn->fd + 1);
                 }
                 fdToConn[conn->fd] = conn;
+            }
+        }
+
+        // Handle the connection sockets
+        for (size_t i = 1; i < poll_args.size(); ++i) {
+            uint32_t ready = poll_args[i].revents;
+            Conn *conn = fdToConn[poll_args[i].fd];
+            if (ready & POLLIN) {
+                handle_read(conn); // application logic
+            }
+            if (ready & POLLOUT) {
+                handle_write(conn); // application logic
             }
         }
     }
