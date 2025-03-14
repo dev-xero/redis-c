@@ -1,6 +1,7 @@
 #include "../include/constants.h"
 #include "../include/utils.h"
 #include <arpa/inet.h>
+#include <cassert>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -20,6 +21,8 @@
 #include <unistd.h>
 #include <vector>
 
+static void fd_set_nb(int fd) { fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK); }
+
 struct Conn {
     int fd = -1;
     // application's intention, for the event loop
@@ -30,8 +33,6 @@ struct Conn {
     std::vector<uint8_t> incoming;
     std::vector<uint8_t> outgoing;
 };
-
-static void fd_set_nb(int fd) { fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK); }
 
 static Conn *handle_accept(int fd) {
     struct sockaddr_in client_addr = {};
@@ -48,6 +49,8 @@ static Conn *handle_accept(int fd) {
 
     return conn;
 }
+
+static void msg_errno(const char *msg) { fprintf(stderr, "[errno:%d] %s\n", errno, msg); }
 
 // Append to the back
 static void buf_append(std::vector<uint8_t> &buf, const uint8_t *data, size_t len) {
@@ -91,6 +94,26 @@ static void handle_read(Conn *conn) {
     }
     buf_append(conn->incoming, buf, (size_t)rv);
     try_one_request(conn);
+}
+
+// Application callback when the socket is writable
+static void handle_write(Conn *conn) {
+    assert(conn->outgoing.size() > 0);
+    ssize_t rv = write(conn->fd, &conn->outgoing[0], conn->outgoing.size());
+    if (rv < 0 && errno == EAGAIN) {
+        return;
+    }
+    if (rv < 0) {
+        msg_errno("write() error");
+        conn->want_close = true;
+        return;
+    }
+    // Remove written data from `outgoing`
+    buf_consume(conn->outgoing, (size_t)rv);
+    if (conn->outgoing.size() == 0) {
+        conn->want_read = true;
+        conn->want_write = false;
+    }
 }
 
 int main() {
